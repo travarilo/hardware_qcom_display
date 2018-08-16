@@ -59,11 +59,11 @@ endif
 
 common_includes += $(display_top)/include
 common_includes += $(display_top)/sdm/include
-common_flags += -isystem $(TARGET_OUT_HEADERS)/qcom/display
+common_flags += -isystem $(TARGET_OUT_HEADERS)/qcom/display-caf-msm8998
 endif
 endif
 
-common_header_export_path := qcom/display
+common_header_export_path := qcom/display-caf-msm8998
 
 #Common libraries external to display HAL
 common_libs := liblog libutils libcutils libhardware
