@@ -564,21 +564,24 @@ int32_t HWCSession::PresentDisplay(hwc2_device_t *device, hwc2_display_t display
 int32_t HWCSession::RegisterCallback(hwc2_device_t *device, int32_t descriptor,
                                      hwc2_callback_data_t callback_data,
                                      hwc2_function_pointer_t pointer) {
-  if (!device || pointer == nullptr) {
+  if (!device) {
     return HWC2_ERROR_BAD_PARAMETER;
   }
   HWCSession *hwc_session = static_cast<HWCSession *>(device);
-  SCOPE_LOCK(hwc_session->callbacks_lock_);
-  auto desc = static_cast<HWC2::Callback>(descriptor);
-  auto error = hwc_session->callbacks_.Register(desc, callback_data, pointer);
-  DLOGD("Registering callback: %s", to_string(desc).c_str());
+  auto error =  HWC2::Error::BadDisplay;
+  {
+    SCOPE_LOCK(hwc_session->callbacks_lock_);
+    auto desc = static_cast<HWC2::Callback>(descriptor);
+    error = hwc_session->callbacks_.Register(desc, callback_data, pointer);
+    hwc_session->callbacks_lock_.Broadcast();
+    DLOGD("%s callback: %s", pointer ? "Registering" : "Deregistering", to_string(desc).c_str());
+  }
   if (descriptor == HWC2_CALLBACK_HOTPLUG) {
     if (hwc_session->hwc_display_[HWC_DISPLAY_PRIMARY]) {
       hwc_session->callbacks_.Hotplug(HWC_DISPLAY_PRIMARY, HWC2::Connection::Connected);
     }
   }
   hwc_session->need_invalidate_ = false;
-  hwc_session->callbacks_lock_.Broadcast();
   return INT32(error);
 }
 
@@ -1068,6 +1071,27 @@ android::status_t HWCSession::notifyCallback(uint32_t command, const android::Pa
     case qService::IQService::SET_COLOR_MODE:
       status = SetColorModeOverride(input_parcel);
       break;
+
+    case qService::IQService::SET_DSI_CLK:
+      if (!input_parcel) {
+        DLOGE("QService command = %d: input_parcel needed.", command);
+        break;
+      }
+      hwc_display_[HWC_DISPLAY_PRIMARY]->SetDynamicDSIClock(UINT32(input_parcel->readInt32()));
+      status = 0;
+      break;
+
+    case qService::IQService::GET_DSI_CLK: {
+      if (!output_parcel) {
+        DLOGE("QService command = %d: output_parcel needed.", command);
+        break;
+      }
+      uint64_t bitrate = 0;
+      hwc_display_[HWC_DISPLAY_PRIMARY]->GetDynamicDSIClock(&bitrate);
+      output_parcel->writeUint64(bitrate);
+      status = 0;
+      break;
+    }
 
     default:
       DLOGW("QService command = %d is not supported", command);
@@ -1588,11 +1612,7 @@ android::status_t HWCSession::GetVisibleDisplayRect(const android::Parcel *input
 
 void HWCSession::Refresh(hwc2_display_t display) {
   SCOPE_LOCK(callbacks_lock_);
-  HWC2::Error err = callbacks_.Refresh(display);
-  while (err != HWC2::Error::None) {
-    callbacks_lock_.Wait();
-    err = callbacks_.Refresh(display);
-  }
+   callbacks_.Refresh(display);
 }
 
 void HWCSession::HotPlug(hwc2_display_t display, HWC2::Connection state) {
@@ -1625,5 +1645,13 @@ int HWCSession::CreateExternalDisplay(int disp, uint32_t primary_width,
                                          qservice_, &hwc_display_[disp]);
     }
 }
+
+#ifdef DISPLAY_CONFIG_1_1
+// Methods from ::vendor::hardware::display::config::V1_1::IDisplayConfig follow.
+Return<int32_t> HWCSession::setDisplayAnimating(uint64_t display_id, bool animating ) {
+  return CallDisplayFunction(static_cast<hwc2_device_t *>(this), display_id,
+                             &HWCDisplay::SetDisplayAnimating, animating);
+}
+#endif
 
 }  // namespace sdm
